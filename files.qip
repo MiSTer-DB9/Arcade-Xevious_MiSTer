@@ -1,3 +1,5 @@
+set_global_assignment -name VERILOG_FILE joydb9md.v
+set_global_assignment -name VERILOG_FILE joydb15.v
 set_global_assignment -name VHDL_FILE cpu/T80se.vhd
 set_global_assignment -name VHDL_FILE cpu/T80_Reg.vhd
 set_global_assignment -name VHDL_FILE cpu/T80_Pack.vhd
