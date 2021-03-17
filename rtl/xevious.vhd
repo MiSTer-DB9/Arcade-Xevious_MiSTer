@@ -17,6 +17,8 @@
 -- Do not redistribute roms whatever the form
 -- Use at your own risk
 ---------------------------------------------------------------------------------
+-- Version 0.4 -- 28/02/2021
+--             Fixed start when credit equal 0
 -- Version 0.3 -- 28/02/2017
 --             Fixed cs54xx audio 2 (mb88 JMP instruction fixed)
 --
@@ -138,7 +140,6 @@ port(
  video_r        : out std_logic_vector(3 downto 0);
  video_g        : out std_logic_vector(3 downto 0);
  video_b        : out std_logic_vector(3 downto 0);
- video_clk      : out std_logic;
  video_csync    : out std_logic;
  video_blankn   : out std_logic;
  video_hs       : out std_logic;
@@ -169,7 +170,14 @@ port(
  left           : in std_logic;
  right          : in std_logic;
  fire           : in std_logic;
- bomb           : in std_logic
+ bomb           : in std_logic;
+ 
+ pause          : in std_logic;
+
+ hs_address     : in  std_logic_vector(10 downto 0);
+ hs_data_out    : out std_logic_vector(7 downto 0);
+ hs_data_in     : in  std_logic_vector(7 downto 0);
+ hs_write       : in std_logic
  );
 end xevious;
 
@@ -409,6 +417,9 @@ architecture struct of xevious is
  signal coin_r   : std_logic;
  signal start1_r : std_logic;
  signal start2_r : std_logic;
+ signal fire_r   : std_logic;
+ signal fire_impulse : std_logic;
+ signal fire_impulse_trig : std_logic;
 
  signal buttons  : std_logic_vector(3 downto 0);
  signal joy      : std_logic_vector(3 downto 0);
@@ -928,7 +939,7 @@ end process;
 sound_machine : entity work.sound_machine
 port map(
 clock_18  => clock_18,
-ena       => ena_snd_machine,
+ena       => ena_snd_machine and not pause,
 hcnt      => hcnt_r(5 downto 0),
 cpu_addr  => ram_bus_addr(3 downto 0), 
 cpu_do    => mux_cpu_do(3 downto 0), 
@@ -1203,13 +1214,14 @@ begin
 		if cs51XX_credit_mode = '1' then
 			  -- decreasing credit by 1 will start a new game for 1 player
 			if (start1 = '0' and start1_r = '1') then
-				cs51XX_credit_mode <= '0';
 				if credit_bcd_0 = "0000" then 
 					if credit_bcd_1 /= "0000" then
+						cs51XX_credit_mode <= '0';
 						credit_bcd_1 <= credit_bcd_1 - "0001";
 						credit_bcd_0 <= "1001";
 					end if;
 				else
+					cs51XX_credit_mode <= '0';
 					credit_bcd_0 <= credit_bcd_0 - "0001";
 				end if; 		
 			end if;
@@ -1270,9 +1282,31 @@ cs51XX_switch_mode_do <= 	not (left & '0' & right & '0' & left & '0' & right & '
 -- non swicth mode reply with respect to reply rank
 with cs51XX_data_cnt select
 cs51XX_non_switch_mode_do <= 	credit_bcd_1 & credit_bcd_0 when "00", -- credits (cpu spy this to start a new game)
-															"00" & not fire & '1' & joy when "01",
+															"00" & not fire & not fire_impulse & joy when "01",
 															X"38" when "10",
 															X"00" when "11"; -- N.U.	
+
+-- fire trigger fire_impulse for 1 frame 
+process (clock_18, fire) 
+begin
+	if rising_edge(clock_18) then
+		
+		fire_r <= fire;
+		
+		if fire_r = '0' and fire = '1' then
+			fire_impulse_trig <= '1';
+		end if;
+		
+		if vcnt = "000000000" and hcnt = "100000000" and ena_vidgen = '1' then
+			fire_impulse <= '0';
+			if fire_impulse_trig = '1' then
+				fire_impulse_trig <= '0';
+				fire_impulse <= '1';
+			end if;
+		end if;
+		
+	end if;
+end process;
 															
 -- N.U. (galaga configuration)
 --cs51XX_non_switch_mode_do <= 	credit_bcd_1 & credit_bcd_0 when "00", -- credits (cpu spy this)
@@ -1374,7 +1408,7 @@ port map(
   RESET_n => reset_n,
   CLK_n   => clock_18,
 	CLKEN   => cpu1_ena,
-  WAIT_n  => '1',
+  WAIT_n  => not pause,
   INT_n   => cpu1_irq_n,
   NMI_n   => cpu1_nmi_n,
   BUSRQ_n => '1',
@@ -1424,7 +1458,7 @@ port map(
   RESET_n => reset_cpu_n,
   CLK_n   => clock_18,
 	CLKEN   => cpu3_ena,
-  WAIT_n  => '1',
+  WAIT_n  => not pause,
   INT_n   => '1',
   NMI_n   => cpu3_nmi_n,
   BUSRQ_n => '1',
@@ -1631,15 +1665,22 @@ port map(
  q    => wram0_do
 );
 -- working/sprite register RAM1   0x8000-0x87FF / 0x8800-0x8FFF
-wram1 : entity work.gen_ram
-generic map( dWidth => 8, aWidth => 11)
+wram1 : entity work.dpram
+generic map(11,8)
 port map(
- clk  => clock_18n,
- we   => wram1_we,
- addr => ram_bus_addr(10 downto 0),
- d    => mux_cpu_do,
- q    => wram1_do
+ clock_a   => clock_18n,
+ wren_a    => wram1_we,
+ address_a => ram_bus_addr(10 downto 0),
+ data_a    => mux_cpu_do,
+ q_a       => wram1_do,
+ 
+ clock_b   => clock_18,
+ wren_b    => hs_write,
+ address_b => hs_address(10 downto 0),
+ data_b    => hs_data_in,
+ q_b       => hs_data_out
 );
+
 -- working/sprite register RAM2   0x9000-0x97FF / 0x9800-0x9FFF
 wram2 : entity work.gen_ram
 generic map( dWidth => 8, aWidth => 11)
